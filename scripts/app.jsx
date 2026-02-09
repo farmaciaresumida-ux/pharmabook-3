@@ -151,7 +151,7 @@ function App() {
     const filteredConditions = getFilteredConditions();
     
     if (loading) {
-        return <div className="loading">⏳ Carregando dados do Supabase...</div>;
+        return null;
     }
     
     // HOME VIEW
