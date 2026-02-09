@@ -45,7 +45,11 @@ const ensureUniqueSlug = async (baseSlug) => {
 
         if (error) {
             console.warn('Não foi possível validar slug no Supabase:', error);
+ codex/fix-authentication-error-on-vercel-login-sowq52
             return `${normalized}-${Math.random().toString(36).slice(2, 6)}`;
+=======
+            return candidate;
+main
         }
 
         if (!data) {
