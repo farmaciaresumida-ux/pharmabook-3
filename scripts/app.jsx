@@ -25,7 +25,38 @@ const getAuthErrorMessage = (error) => {
     if (message.toLowerCase().includes('redirect') || message.toLowerCase().includes('url not allowed')) {
         return 'Domínio não autorizado para autenticação. Confirme se a URL do Vercel está liberada no Supabase.';
     }
+    if (message.toLowerCase().includes('duplicate key')) {
+        return 'Já existe um perfil com esse slug. Tente novamente com um slug diferente.';
+    }
     return message;
+};
+
+const ensureUniqueSlug = async (baseSlug) => {
+    const normalized = baseSlug || `user-${Math.random().toString(36).slice(2, 8)}`;
+    let candidate = normalized;
+    let attempt = 0;
+
+    while (attempt < 3) {
+        const { data, error } = await supabaseClient
+            .from('profiles')
+            .select('slug')
+            .eq('slug', candidate)
+            .maybeSingle();
+
+        if (error) {
+            console.warn('Não foi possível validar slug no Supabase:', error);
+            return candidate;
+        }
+
+        if (!data) {
+            return candidate;
+        }
+
+        attempt += 1;
+        candidate = `${normalized}-${Math.random().toString(36).slice(2, 6)}`;
+    }
+
+    return `${normalized}-${Date.now().toString(36)}`;
 };
 
 function App() {
@@ -372,7 +403,8 @@ function App() {
                                             }
                                             
                                             const displayName = formState.displayName.trim();
-                                            const slug = formState.slug.trim() || slugify(displayName);
+                                            const slugBase = formState.slug.trim() || slugify(displayName);
+                                            const slug = await ensureUniqueSlug(slugBase);
                                             
                                             const { data, error } = await supabaseClient.auth.signUp({
                                                 email: trimmedEmail,
