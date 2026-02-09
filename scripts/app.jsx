@@ -1,13 +1,37 @@
 const { useState, useEffect } = React;
 const supabaseClient = window.pharmabookSupabaseClient;
 
+const slugify = (value) => value
+    .toString()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+
 function App() {
     // STATES
     const [loading, setLoading] = useState(true);
+    const [authLoading, setAuthLoading] = useState(true);
     const [view, setView] = useState('home');
+    const [currentPath, setCurrentPath] = useState(window.location.pathname);
+    const [session, setSession] = useState(null);
+    const [profile, setProfile] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [activeTab, setActiveTab] = useState('todas');
     const [systemFilter, setSystemFilter] = useState(null);
+    const [authView, setAuthView] = useState('signup');
+    const [authMessage, setAuthMessage] = useState('');
+    const [authError, setAuthError] = useState('');
+    const [formState, setFormState] = useState({
+        displayName: '',
+        slug: '',
+        email: '',
+        password: '',
+        confirmPassword: ''
+    });
+    const [authSubmitting, setAuthSubmitting] = useState(false);
     
     // DADOS DO SUPABASE
     const [systems, setSystems] = useState([]);
@@ -21,10 +45,113 @@ function App() {
     
     const [selectedCondition, setSelectedCondition] = useState(null);
     
+    const navigateTo = (path) => {
+        if (window.location.pathname !== path) {
+            window.history.pushState({}, '', path);
+            setCurrentPath(path);
+        }
+    };
+    
+    // ROTAS
+    useEffect(() => {
+        const handlePopState = () => setCurrentPath(window.location.pathname);
+        window.addEventListener('popstate', handlePopState);
+        return () => window.removeEventListener('popstate', handlePopState);
+    }, []);
+    
+    // AUTH SESSION
+    useEffect(() => {
+        let subscription;
+        
+        const initAuth = async () => {
+            const { data } = await supabaseClient.auth.getSession();
+            setSession(data.session);
+            setAuthLoading(false);
+            
+            if (data.session) {
+                await ensureProfile(data.session.user);
+                if (window.location.pathname === '/auth') {
+                    navigateTo('/');
+                }
+            } else if (window.location.pathname !== '/auth') {
+                navigateTo('/auth');
+            }
+        };
+        
+        initAuth();
+        
+        const { data: authListener } = supabaseClient.auth.onAuthStateChange(
+            async (event, newSession) => {
+                setSession(newSession);
+                if (newSession?.user) {
+                    await ensureProfile(newSession.user);
+                }
+                if (newSession && window.location.pathname === '/auth') {
+                    navigateTo('/');
+                }
+                if (!newSession && window.location.pathname !== '/auth') {
+                    navigateTo('/auth');
+                }
+            }
+        );
+        
+        subscription = authListener.subscription;
+        
+        return () => subscription?.unsubscribe();
+    }, []);
+    
     // CARREGAR DADOS DO SUPABASE
     useEffect(() => {
-        loadData();
-    }, []);
+        if (session) {
+            loadData();
+        }
+    }, [session]);
+    
+    useEffect(() => {
+        if (session && currentPath === '/auth') {
+            navigateTo('/');
+        }
+        if (!session && !authLoading && currentPath !== '/auth') {
+            navigateTo('/auth');
+        }
+    }, [session, currentPath, authLoading]);
+    
+    async function ensureProfile(user) {
+        try {
+            const { data, error } = await supabaseClient
+                .from('profiles')
+                .select('id, slug, display_name, plan')
+                .eq('id', user.id)
+                .single();
+            
+            if (error && error.code !== 'PGRST116') {
+                throw error;
+            }
+            
+            if (!data) {
+                const metadata = user.user_metadata || {};
+                const displayName = metadata.display_name || metadata.full_name || user.email?.split('@')[0] || 'Usuário';
+                const slug = metadata.slug || slugify(displayName) || `user-${user.id.slice(0, 8)}`;
+                const { data: createdProfile, error: insertError } = await supabaseClient
+                    .from('profiles')
+                    .insert({
+                        id: user.id,
+                        slug,
+                        display_name: displayName,
+                        plan: 'free'
+                    })
+                    .select('id, slug, display_name, plan')
+                    .single();
+                
+                if (insertError) throw insertError;
+                setProfile(createdProfile);
+            } else {
+                setProfile(data);
+            }
+        } catch (error) {
+            console.error('Erro ao carregar perfil:', error);
+        }
+    }
     
     async function loadData() {
         try {
@@ -150,8 +277,234 @@ function App() {
     
     const filteredConditions = getFilteredConditions();
     
-    if (loading) {
+    if (authLoading) {
         return null;
+    }
+    
+    if (currentPath === '/auth') {
+        return (
+            <div className="auth-page">
+                <div className="auth-shell">
+                    <div className="auth-brand">
+                        <div className="auth-logo">💊</div>
+                        <h1>PHARMABOOK</h1>
+                        <p>Crie sua conta e tenha um ambiente exclusivo para suas prescrições e indicações.</p>
+                        <div className="auth-benefits">
+                            <div className="auth-benefit">🔒 Dados seguros no seu perfil</div>
+                            <div className="auth-benefit">📚 Acesso completo às condições clínicas</div>
+                            <div className="auth-benefit">⚡ Fluxo rápido para atendimento</div>
+                        </div>
+                    </div>
+                    <div className="auth-card">
+                        <div className="auth-tabs">
+                            <button
+                                className={`auth-tab ${authView === 'signup' ? 'active' : ''}`}
+                                onClick={() => { setAuthView('signup'); setAuthError(''); setAuthMessage(''); }}
+                                type="button"
+                            >
+                                Criar conta
+                            </button>
+                            <button
+                                className={`auth-tab ${authView === 'login' ? 'active' : ''}`}
+                                onClick={() => { setAuthView('login'); setAuthError(''); setAuthMessage(''); }}
+                                type="button"
+                            >
+                                Entrar
+                            </button>
+                        </div>
+                        
+                        <div className="auth-content">
+                            <h2>{authView === 'signup' ? 'Vamos criar sua conta' : 'Bem-vindo de volta'}</h2>
+                            <p className="auth-subtitle">
+                                {authView === 'signup'
+                                    ? 'Comece agora e personalize seu perfil.'
+                                    : 'Acesse sua conta com seu e-mail e senha.'}
+                            </p>
+                            
+                            {authMessage && <div className="auth-message success">{authMessage}</div>}
+                            {authError && <div className="auth-message error">{authError}</div>}
+                            
+                            <form
+                                className="auth-form"
+                                onSubmit={async (event) => {
+                                    event.preventDefault();
+                                    setAuthError('');
+                                    setAuthMessage('');
+                                    setAuthSubmitting(true);
+                                    
+                                    try {
+                                        const trimmedEmail = formState.email.trim().toLowerCase();
+                                        if (!trimmedEmail || !formState.password) {
+                                            setAuthError('Preencha o e-mail e a senha.');
+                                            return;
+                                        }
+                                        
+                                        if (authView === 'signup') {
+                                            if (!formState.displayName.trim()) {
+                                                setAuthError('Informe seu nome para criar a conta.');
+                                                return;
+                                            }
+                                            if (formState.password.length < 6) {
+                                                setAuthError('A senha precisa ter pelo menos 6 caracteres.');
+                                                return;
+                                            }
+                                            if (formState.password !== formState.confirmPassword) {
+                                                setAuthError('As senhas não conferem.');
+                                                return;
+                                            }
+                                            
+                                            const displayName = formState.displayName.trim();
+                                            const slug = formState.slug.trim() || slugify(displayName);
+                                            
+                                            const { data, error } = await supabaseClient.auth.signUp({
+                                                email: trimmedEmail,
+                                                password: formState.password,
+                                                options: {
+                                                    data: {
+                                                        display_name: displayName,
+                                                        slug
+                                                    },
+                                                    emailRedirectTo: `${window.location.origin}/`
+                                                }
+                                            });
+                                            
+                                            if (error) throw error;
+                                            
+                                            if (data.user) {
+                                                const { error: profileError } = await supabaseClient
+                                                    .from('profiles')
+                                                    .insert({
+                                                        id: data.user.id,
+                                                        slug,
+                                                        display_name: displayName,
+                                                        plan: 'free'
+                                                    });
+                                                
+                                                if (profileError && profileError.code !== '23505') {
+                                                    throw profileError;
+                                                }
+                                            }
+                                            
+                                            if (!data.session) {
+                                                setAuthMessage('Conta criada! Verifique seu e-mail para confirmar e acessar.');
+                                                setAuthView('login');
+                                            }
+                                        } else {
+                                            const { error } = await supabaseClient.auth.signInWithPassword({
+                                                email: trimmedEmail,
+                                                password: formState.password
+                                            });
+                                            if (error) throw error;
+                                        }
+                                    } catch (error) {
+                                        console.error('Erro de autenticação:', error);
+                                        setAuthError('Não foi possível autenticar. Verifique seus dados e tente novamente.');
+                                    } finally {
+                                        setAuthSubmitting(false);
+                                    }
+                                }}
+                            >
+                                {authView === 'signup' && (
+                                    <>
+                                        <label className="auth-label">
+                                            Nome completo
+                                            <input
+                                                type="text"
+                                                placeholder="Ex: Ana Paula"
+                                                value={formState.displayName}
+                                                onChange={(e) => {
+                                                    const value = e.target.value;
+                                                    setFormState((prev) => ({
+                                                        ...prev,
+                                                        displayName: value,
+                                                        slug: slugify(value)
+                                                    }));
+                                                }}
+                                                required
+                                            />
+                                        </label>
+                                        <label className="auth-label">
+                                            Seu slug (URL única)
+                                            <input
+                                                type="text"
+                                                placeholder="ex: ana-paula"
+                                                value={formState.slug}
+                                                onChange={(e) => setFormState((prev) => ({ ...prev, slug: e.target.value }))}
+                                            />
+                                        </label>
+                                    </>
+                                )}
+                                <label className="auth-label">
+                                    E-mail
+                                    <input
+                                        type="email"
+                                        placeholder="seu@email.com"
+                                        value={formState.email}
+                                        onChange={(e) => setFormState((prev) => ({ ...prev, email: e.target.value }))}
+                                        required
+                                    />
+                                </label>
+                                <label className="auth-label">
+                                    Senha
+                                    <input
+                                        type="password"
+                                        placeholder="Mínimo de 6 caracteres"
+                                        value={formState.password}
+                                        onChange={(e) => setFormState((prev) => ({ ...prev, password: e.target.value }))}
+                                        required
+                                    />
+                                </label>
+                                {authView === 'signup' && (
+                                    <label className="auth-label">
+                                        Confirmar senha
+                                        <input
+                                            type="password"
+                                            placeholder="Repita sua senha"
+                                            value={formState.confirmPassword}
+                                            onChange={(e) => setFormState((prev) => ({ ...prev, confirmPassword: e.target.value }))}
+                                            required
+                                        />
+                                    </label>
+                                )}
+                                <button className="auth-submit" type="submit" disabled={authSubmitting}>
+                                    {authSubmitting
+                                        ? 'Enviando...'
+                                        : authView === 'signup'
+                                            ? 'Criar conta'
+                                            : 'Entrar'}
+                                </button>
+                            </form>
+                            
+                            <div className="auth-footer">
+                                {authView === 'signup' ? (
+                                    <span>
+                                        Já tem conta?{' '}
+                                        <button type="button" onClick={() => setAuthView('login')}>
+                                            Entrar
+                                        </button>
+                                    </span>
+                                ) : (
+                                    <span>
+                                        Não tem conta?{' '}
+                                        <button type="button" onClick={() => setAuthView('signup')}>
+                                            Criar conta
+                                        </button>
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+    
+    if (!session) {
+        return null;
+    }
+    
+    if (loading) {
+        return <div className="loading">Carregando dados...</div>;
     }
     
     // HOME VIEW
@@ -179,9 +532,21 @@ function App() {
                         </div>
                     </div>
                     <div className="header-right">
+                        <div className="header-user">
+                            <span>👋 Olá,</span>
+                            <strong>{profile?.display_name || 'Profissional'}</strong>
+                        </div>
                         <button className="header-btn">📄 Prescrições</button>
                         <button className="header-btn">💊 Bulário</button>
-                        <button className="header-btn">👤 Perfil</button>
+                        <button
+                            className="header-btn"
+                            onClick={async () => {
+                                await supabaseClient.auth.signOut();
+                                navigateTo('/auth');
+                            }}
+                        >
+                            🚪 Sair
+                        </button>
                     </div>
                 </header>
                 
@@ -306,6 +671,21 @@ function App() {
                             <div className="app-title">PHARMABOOK</div>
                             <div className="app-subtitle">Prescrição e Indicação Farmacêutica</div>
                         </div>
+                    </div>
+                    <div className="header-right">
+                        <div className="header-user">
+                            <span>👋 Olá,</span>
+                            <strong>{profile?.display_name || 'Profissional'}</strong>
+                        </div>
+                        <button
+                            className="header-btn"
+                            onClick={async () => {
+                                await supabaseClient.auth.signOut();
+                                navigateTo('/auth');
+                            }}
+                        >
+                            🚪 Sair
+                        </button>
                     </div>
                 </header>
                 
