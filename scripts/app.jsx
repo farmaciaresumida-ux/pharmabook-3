@@ -370,7 +370,7 @@ function App() {
                                             
                                             if (error) throw error;
                                             
-                                            if (data.user) {
+                                            if (data.user && data.session) {
                                                 const { error: profileError } = await supabaseClient
                                                     .from('profiles')
                                                     .insert({
@@ -398,7 +398,8 @@ function App() {
                                         }
                                     } catch (error) {
                                         console.error('Erro de autenticação:', error);
-                                        setAuthError('Não foi possível autenticar. Verifique seus dados e tente novamente.');
+                                        const message = error?.message || 'Não foi possível autenticar. Verifique seus dados e tente novamente.';
+                                        setAuthError(message);
                                     } finally {
                                         setAuthSubmitting(false);
                                     }
