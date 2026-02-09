@@ -1,5 +1,6 @@
 const { useState, useEffect } = React;
 const supabaseClient = window.pharmabookSupabaseClient;
+const authRedirectUrl = window.pharmabookAuthRedirectUrl || `${window.location.origin}/auth`;
 
 const slugify = (value) => value
     .toString()
@@ -9,6 +10,23 @@ const slugify = (value) => value
     .trim()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '');
+
+const getAuthErrorMessage = (error) => {
+    const message = error?.message || 'Não foi possível autenticar. Verifique seus dados e tente novamente.';
+    if (message.includes('Invalid login credentials')) {
+        return 'E-mail ou senha inválidos. Verifique os dados e tente novamente.';
+    }
+    if (message.includes('Email not confirmed')) {
+        return 'Seu e-mail ainda não foi confirmado. Verifique sua caixa de entrada e o spam.';
+    }
+    if (message.includes('User already registered')) {
+        return 'Este e-mail já está cadastrado. Faça login ou recupere sua senha.';
+    }
+    if (message.toLowerCase().includes('redirect') || message.toLowerCase().includes('url not allowed')) {
+        return 'Domínio não autorizado para autenticação. Confirme se a URL do Vercel está liberada no Supabase.';
+    }
+    return message;
+};
 
 function App() {
     // STATES
@@ -364,7 +382,7 @@ function App() {
                                                         display_name: displayName,
                                                         slug
                                                     },
-                                                    emailRedirectTo: `${window.location.origin}/`
+                                                    emailRedirectTo: authRedirectUrl
                                                 }
                                             });
                                             
@@ -398,8 +416,7 @@ function App() {
                                         }
                                     } catch (error) {
                                         console.error('Erro de autenticação:', error);
-                                        const message = error?.message || 'Não foi possível autenticar. Verifique seus dados e tente novamente.';
-                                        setAuthError(message);
+                                        setAuthError(getAuthErrorMessage(error));
                                     } finally {
                                         setAuthSubmitting(false);
                                     }
